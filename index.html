@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Semantic Rewriter</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f7f6;
+        }
+        h1, p { text-align: center; }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-size: 16px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #8e44ad;
+            color: white;
+            border: none;
+            padding: 15px 20px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            align-self: center;
+            font-weight: bold;
+        }
+        button:hover { background-color: #732d91; }
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+        .stats {
+            text-align: center;
+            font-weight: bold;
+            color: #2c3e50;
+            min-height: 24px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>AI Semantic Rewriter</h1>
+    <p>This runs a localized AI model in your browser. It evaluates your text sentence by sentence. If the AI can say it in fewer words, it replaces it.</p>
+
+    <div class="container">
+        <textarea id="inputText" placeholder="Paste a paragraph here..."></textarea>
+        <button id="actionBtn">Rewrite with AI</button>
+        <textarea id="outputText" placeholder="The AI-rewritten text will appear here progressively..." readonly></textarea>
+        <div id="stats" class="stats">Ready to process.</div>
+    </div>
+
+    <script type="module">
+        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
+
+        // Disable local model loading since we are serving this on the web
+        env.allowLocalModels = false;
+
+        let aiPipeline = null;
+
+        async function processText() {
+            const inputText = document.getElementById('inputText').value;
+            const outputArea = document.getElementById('outputText');
+            const statusDiv = document.getElementById('stats');
+            const btn = document.getElementById('actionBtn');
+
+            if (!inputText.trim()) return;
+
+            btn.disabled = true;
+            outputArea.value = "";
+            
+            try {
+                // 1. Download / Initialize the AI Model
+                if (!aiPipeline) {
+                    statusDiv.innerText = "Downloading AI Model (~60MB). This only happens once...";
+                    statusDiv.style.color = "#e67e22";
+                    
+                    // We use t5-small, a great lightweight model for text-to-text generation (summarization)
+                    aiPipeline = await pipeline('summarization', 'Xenova/t5-small', {
+                        progress_callback: (info) => {
+                            if (info.status === 'progress') {
+                                statusDiv.innerText = `Downloading AI Model: ${Math.round(info.progress)}%`;
+                            }
+                        }
+                    });
+                }
+
+                // 2. Split text into sentences for granular processing
+                const sentences = inputText.match(/[^.!?]+[.!?]+/g) || [inputText];
+                let finalOutput = [];
+                let wordsSaved = 0;
+
+                // 3. Process sentence by sentence
+                for (let i = 0; i < sentences.length; i++) {
+                    let originalSentence = sentences[i].trim();
+                    let originalWordCount = originalSentence.split(/\s+/).length;
+
+                    // AI models can act weirdly on very short sentences, so we skip them
+                    if (originalWordCount < 6) {
+                        finalOutput.push(originalSentence);
+                        outputArea.value = finalOutput.join(" ");
+                        continue;
+                    }
+
+                    statusDiv.innerText = `AI is rewriting sentence ${i + 1} of ${sentences.length}...`;
+                    statusDiv.style.color = "#3498db";
+
+                    // Ask the AI to summarize/rewrite
+                    const result = await aiPipeline(originalSentence, {
+                        max_new_tokens: 50,
+                        temperature: 0.7
+                    });
+
+                    let conciseSentence = result[0].summary_text.trim();
+                    let newWordCount = conciseSentence.split(/\s+/).length;
+
+                    // PROGRAMMATIC RULE: If the AI output is shorter but not completely blank, replace it.
+                    if (newWordCount < originalWordCount && conciseSentence.length > 3) {
+                        // Fix capitalization and punctuation
+                        conciseSentence = conciseSentence.charAt(0).toUpperCase() + conciseSentence.slice(1);
+                        if (!conciseSentence.match(/[.!?]$/)) conciseSentence += ".";
+                        
+                        finalOutput.push(conciseSentence);
+                        wordsSaved += (originalWordCount - newWordCount);
+                    } else {
+                        // If it couldn't find a shorter way, keep the original
+                        finalOutput.push(originalSentence);
+                    }
+                    
+                    // Update the text box progressively so the user isn't staring at a frozen screen
+                    outputArea.value = finalOutput.join(" ");
+                }
+
+                // 4. Final output stats
+                if (wordsSaved > 0) {
+                    statusDiv.innerText = `Success! The AI saved you ${wordsSaved} word(s).`;
+                    statusDiv.style.color = "#27ae60";
+                } else {
+                    statusDiv.innerText = "Text processed! The AI couldn't find a shorter way to write this.";
+                    statusDiv.style.color = "#8e44ad";
+                }
+
+            } catch (error) {
+                console.error("AI Error:", error);
+                statusDiv.innerText = "An error occurred. Check the developer console.";
+                statusDiv.style.color = "#c0392b";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById('actionBtn').addEventListener('click', processText);
+    </script>
+</body>
+</html>
